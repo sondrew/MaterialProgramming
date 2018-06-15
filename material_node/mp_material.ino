@@ -8,23 +8,23 @@
 #define BLUE  D3
 
 //  Ultrasonic sensor pins
-#define TRIGGER D6 //D8 not working
-#define ECHO    D7 //D5 not working
+#define TRIGGER D6
+#define ECHO    D7
 // Ultrasonic variables
 #define MAX_DISTANCE 40
 NewPing sonar(TRIGGER, ECHO, MAX_DISTANCE);
 
 // Variables for controlling input publishing
-int inputCounter = 0;                   // Number of devices using this device as input - publishes data if > 0
-int newTime = millis();             
-int oldTime = millis();             
-const int INTERVAL = 200;               // Distance measuring interval (millisec)
+int inputCounter = 0;        // Number of devices using this device as input - publishes data if > 0
+int newTime = millis();     
+int oldTime = millis();     
+const int INTERVAL = 200;    // Distance measuring interval (millisec)
 // Variables for input reading and publishing
-int distance;                           // Store distance as centimeters int in range 0-40 (MAX_DISTANCE)
-int convertedDistance;                  // Maps distance from 0-40 to 0-255 (8 bits)
-boolean publishZero = false;            // Don't publish distance 0 multiple times if not changed
+int distance;                // Store distance as centimeters int in range 0-40 (MAX_DISTANCE)
+int convertedDistance;       // Maps distance from 0-40 to 0-255 (8 bits)
+boolean publishZero = false; // Don't publish distance 0 multiple times if not changed
 
-const char deviceId = '1';              // ID of this device and the ID on the RFID tag
+const char deviceId = '1';   // ID of this device and the ID on the RFID tag
 // Output color variables, two for each RGB color
 // redInput store deviceId of input node and redInverse store output mode
 int redInput = 0;

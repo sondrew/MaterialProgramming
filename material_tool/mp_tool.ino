@@ -1,44 +1,75 @@
-// Libraries
-#include <SPI.h>              // Library included in the Arduino IDE
-#include <MFRC522.h>          // RFID library: Install/download instructions above
-#include <ESP8266WiFi.h>      // WiFi library: Install/download instructions above
-#include <PubSubClient.h>     // MQTT library: Install/download instructions above
+// LIBRARIES
+// Used for SPI communication for RFID (included in the Arduino IDE)
+#include <SPI.h>
+// RFID library
+#include <MFRC522.h>
+// Handle Wi-Fi connection for ESP8266
+#include <ESP8266WiFi.h>
+// MQTT client - utilizes Wi-Fi library
+#include <PubSubClient.h>
 
-// Pin connections
-#define BUTTONS   A0            // Multiple buttons on one analog pin
+/* BUTTONS 
+Multiple buttons with voltage division use one analog pin 
+Analog button value is read in 10 bits (range 0-1024)
+The different buttons will have analog values within this range
+Listed from left to right (closer to further away from input):
+
+BUTTON    ANALOG VALUE IN RANGE
+Input     900-1024
+Color     600-750
+Mode      400-500
+Output    300-390
+*/
+#define BUTTONS   A0
+// RGB LED pins
 #define LED_RED   D0            
 #define LED_GREEN D2
 #define LED_BLUE  D1
+// RFID pins
 #define RST_PIN   D3
 #define SS_PIN    D8
 
-// Variables for buttons and intervals
+// VARIABLES FOR FUNCTIONALITY FLOW CONTROL
+// Variables for reading and comparing new and old analog button values
 int newAnalogValue;
 int oldAnalogValue;
+// newTime and oldTime control flow based on an interval timing system
 int newTime;
 int oldTime;
-const int INTERVAL = 300;
+const int INTERVAL = 200;
 boolean inputPressed = false;
 boolean outputPressed = false;
-const int tactileFlash = 50;      // LED will stop flashing for x ms to emulate tactile feedback upon button press
+// Illumination feedback - LED will stop flashing for
+// x ms to emulate tactile feedback upon button press
+const int tactileFlash = 50;
 
-// RFID variables
-MFRC522 rfid(SS_PIN, RST_PIN);   // Create MFRC522 instance.
+// RFID VARIABLES
+// Create MFRC522 instance (RFID reader)
+MFRC522 rfid(SS_PIN, RST_PIN);
+// Initialize RFID authentication key variable
 MFRC522::MIFARE_Key key;
-byte sector         = 1;            // Location of sector for reading data
-byte blockAddr      = 4;            // Location of block containing our data (first 8 bytes)
-byte trailerBlock   = 7;            // Location of sector keys
+// Location of sector of material node ID
+byte sector         = 1;
+// Location of block containing the material node ID (first 8 bytes)
+byte blockAddr      = 4;
+// Location of sector keys
+byte trailerBlock   = 7;
 
-// MQTT variables
-const char* ssid = "WiPi";  // WiFi name
-const char* password = "somethingspecial";   // WiFi password
-const char* mqttServer = "192.168.42.1";             // IP/host running your MQTT broker
-WiFiClient espClient;                             // Create WiFi client instance
-PubSubClient client(espClient);                   // Create MQTT client instance with WiFi client
-long lastMsg = 0;                                 // Initialize variable for last received data
-char msg[50];                                     // Initialize variable for publishing data
+// MQTT/WIFI VARIABLES
+const char* ssid = "WiFiName";
+const char* password = "WiFiPassword";
+// IP/host running your MQTT broker
+const char* mqttServer = "127.0.0.1";
+// Create WiFi client instance
+WiFiClient espClient;
+// Create MQTT client instance with WiFi client
+PubSubClient client(espClient);
+// Initialize variable for last received data
+long lastMsg = 0;
+// Initialize variable for publishing data
+char msg[50];
 
-// Mapping variables
+// MAPPING RELATIONSHIP VARIABLES
 int inputDevice = 0;
 int outputDevice = 0;
 char outputColor = 'g';
@@ -48,56 +79,65 @@ boolean invertedDistance = false;
 
 void setup() {
   Serial.begin(115200);
+  // All buttons as one analog input
   pinMode(BUTTONS, INPUT);
+
   oldTime = millis();
   
-  SPI.begin();                                    // Initialize SPI bus to communicate with RFID reader
-  rfid.PCD_Init();                                // Initialize MFRC522 (RFID reader)
+  // Initialize SPI bus to communicate with RFID reader
+  SPI.begin();
+  // Initialize MFRC522 (RFID reader)
+  rfid.PCD_Init();
   delay(200);
   
-  wifiSetup();                                    // Run helper function to setup WiFi
-  client.setServer(mqttServer, 1883);             // Set server with given variable and default MQTT port
-  client.setCallback(callback);                   // Callback invoked when message on subscribed topic is received
+  // Run helper function to setup WiFi
+  wifiSetup();
+  // Set server with given variable and default MQTT port
+  client.setServer(mqttServer, 1883);
+  // Callback invoked when message on subscribed topic is received
+  client.setCallback(callback);
   
 
-  for (byte i = 0; i < 6; i++) {                  // Set RFID key FFFFFFFFFFFF by factory default
+  // Initialize RFID hex key to FFFFFFFFFFFF (factory default)
+  for (byte i = 0; i < 6; i++) {
     key.keyByte[i] = 0xFF;
   }
   
+  // RGB LED pin modes
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_GREEN, OUTPUT);
   pinMode(LED_BLUE, OUTPUT);
-  setColor(200, 0, 200); // Set awaiting commands color to purple
+  // Set idle/awaiting command state to color white
+  setColor(200, 200, 200); 
   delay(200);
   Serial.println("\nMaterial programming tool ready");
-
 }
 
-void loop() {
 
+void loop() {
   // Check if MQTT client is connected, (re)connect if not
-  
   if (! client.connected()) {
     reconnect();
   }
+
   // Allow the client to process incoming messages and maintain its connection to the server
   client.loop(); 
   
   newTime = millis();
   
   newAnalogValue = analogRead(BUTTONS);
+  // Read analog button value every loop - disregard values under 100
   if (newAnalogValue > 100) readButtons(newAnalogValue);
   
   //if (newAnalogValue != oldAnalogValue) {
   //if (newAnalogValue != oldAnalogValue  & newTime > (oldTime + INTERVAL)) {
   //if (newTime < oldTime + INTERVAL) return;
 
-  // Run in every loop to blink LED if inverted distance measuring
+  // Run in every loop to blink LED if inverse mode is active
   blinkColor();
 
-  //turnOffLed();
   
-    // Look for new tags
+  // Look for new tags
   if ( ! rfid.PICC_IsNewCardPresent()) {
     delay(50);
     return;
@@ -111,6 +151,7 @@ void loop() {
   //oldAnalogValue = newAnalogValue;
   //oldTime = newTime;
   
+  // Initialize RFID reading variables
   MFRC522::StatusCode status;
   byte buffer[18];
   byte size = sizeof(buffer);
@@ -183,6 +224,7 @@ void loop() {
   rfid.PCD_StopCrypto1();
 }
 
+// Dump RFID hexadecimal data to serial
 void dumpByteArray(byte *buffer, byte bufferSize) {
   for (byte i = 0; i < bufferSize; i++) {
     Serial.print(buffer[i] < 0x10 ? " 0" : " ");
@@ -190,7 +232,7 @@ void dumpByteArray(byte *buffer, byte bufferSize) {
   }
 }
 
-
+// Return RFID hexadecimal data as a String
 String returnByteString(byte *buffer, byte bufferSize) {
   String hexString = "";
   for (byte i = 0; i < bufferSize; i++) {
@@ -198,6 +240,7 @@ String returnByteString(byte *buffer, byte bufferSize) {
   } return hexString;
 }
 
+// Reset all mapping relationship variables
 void resetVariables(){
   outputColor = 'g';
   inputPressed = false;
@@ -207,6 +250,7 @@ void resetVariables(){
   invertedDistance = false;
 }
 
+// Helper function for debug
 void printVariables() {
   Serial.println();
   Serial.println("Input device: " + (String) inputDevice);
@@ -216,7 +260,7 @@ void printVariables() {
   Serial.println();
 }
 
-// Helper function
+// Helper function for reading analog button voltage values
 boolean inInterval(int compare, int low, int high) {
   return !(compare < low) && !(high < compare);
 }
@@ -239,7 +283,7 @@ void readButtons(int analogValue) {
     } else { // input button is not pressed or input device is not set
       failureRead();
       resetVariables();
-      setColor(200, 0, 200);
+      setColor(200, 200, 200);
     }
     //return 4;
   } else if (inInterval(newAnalogValue, 400, 500)) {
@@ -255,7 +299,7 @@ void readButtons(int analogValue) {
       changeColor(outputColor, 250);
     } else {
       failureRead();
-      setColor(200, 0, 200);
+      setColor(200, 200, 200);
     }
     
   } else if (inInterval(newAnalogValue, 600, 750)) {
@@ -264,7 +308,7 @@ void readButtons(int analogValue) {
       alternateColors();
     } else {
       failureRead();
-      setColor(200, 0, 200);
+      setColor(200, 200, 200);
     }
     
   } else if (inInterval(newAnalogValue, 900, 1025)) {
@@ -276,7 +320,7 @@ void readButtons(int analogValue) {
     }
     setColor(0, 0, 0);
     delay(tactileFlash);
-    setColor(200, 0, 200);
+    setColor(200, 200, 200);
     // Change from purple to red
     inputPressed = true;
     //return 1;
@@ -306,6 +350,7 @@ void turnOffLed() {
   analogWrite(LED_BLUE, 0);
 }
 
+// Blink RGB led if inverse mode is active
 void blinkColor() {
   if (!invertedDistance) return;
   if (newTime < oldTime + INTERVAL) return;
@@ -313,6 +358,7 @@ void blinkColor() {
   if (blinkHigh) changeColor(outputColor, 250);
   else changeColor(outputColor, 0);
   
+  // Alternate on/off blinking
   blinkHigh = !blinkHigh;
   oldTime = millis();
 }
