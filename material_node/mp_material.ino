@@ -1,77 +1,64 @@
-#include <NewPing.h>
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+#include <NewPing.h>        // Library for simplified distance measuring
+#include <ESP8266WiFi.h>    // Handles Wi-Fi connection for ESP8266
+#include <PubSubClient.h>   // MQTT client - uses Wi-Fi library
 
+// RGB LED pins
 #define RED   D1
 #define GREEN D2
 #define BLUE  D3
 
+//  Ultrasonic sensor pins
 #define TRIGGER D6 //D8 not working
 #define ECHO    D7 //D5 not working
+// Ultrasonic variables
 #define MAX_DISTANCE 40
-
 NewPing sonar(TRIGGER, ECHO, MAX_DISTANCE);
 
-int ledStrength;
-int ledInverse;
-int distance;
+// Variables for controlling input publishing
+int inputCounter = 0;                   // Number of devices using this device as input - publishes data if > 0
+int newTime = millis();             
+int oldTime = millis();             
+const int INTERVAL = 200;               // Distance measuring interval (millisec)
+// Variables for input reading and publishing
+int distance;                           // Store distance as centimeters int in range 0-40 (MAX_DISTANCE)
+int convertedDistance;                  // Maps distance from 0-40 to 0-255 (8 bits)
+boolean publishZero = false;            // Don't publish distance 0 multiple times if not changed
 
-// MQTT VARIABLES
-const char* ssid = "WiPi";                        // WiFi name
-//const char* ssid = "Sondre Widmark's iPhone";
-const char* password = "somethingspecial";        // WiFi password
-const char* mqttServer = "192.168.42.1";          // IP/host running your MQTT broker
-//const char* mqttServer = "172.20.10.2";
-WiFiClient espClient;                             // Create WiFi client instance
-PubSubClient client(espClient);                   // Create MQTT client instance with WiFi client
-long lastMsg = 0;                                 // Initialize variable for last received data
-char msg[50];                                     // Initialize variable for publishing data
+const char deviceId = '1';              // ID of this device and the ID on the RFID tag
+// Output color variables, two for each RGB color
+// redInput store deviceId of input node and redInverse store output mode
+int redInput = 0;
+boolean redInverse = false;
+int greenInput = 0;
+boolean greenInverse = false;
+int blueInput = 0;
+boolean blueInverse = false;
 
-const int maxDevices = 4;
-const char deviceId = '3';                            // ID of this device
 
+/// MQTT variables
+const char* ssid = "WifiName";          // WiFi name
+const char* password = "WiFiPassword";  // WiFi password
+const char* mqttServer = "127.0.0.1";   // IP/host running your MQTT broker
+WiFiClient espClient;                   // Create WiFi client instance
+PubSubClient client(espClient);         // Create MQTT client instance with WiFi client
+long lastMsg = 0;                       // Initialize variable for last received data
+char msg[50];                           // Initialize variable for publishing data
 // Topics subscribed to
 const String topicInput = (String) deviceId + "-input";
 const String topicOutput = (String) deviceId + "-output";
 const String topicUnInput = (String) deviceId + "-uninput";
 const String topicUnOutput = (String) deviceId + "-unoutput";
-
+// Name for topic to listen/publish to for input data
 const String listeningTopicName = "distance";
 const String publishTopicName = (String) deviceId + "-" + listeningTopicName;
-
-// New system
-int redInput = 0;
-int greenInput = 0;
-int blueInput = 0;
-boolean redInverse = false;
-boolean greenInverse = false;
-boolean blueInverse = false;
-int numOfOutput = 0;                                    // Number of devices using this device as input
-const char* mqttDistanceTopic = deviceId + '-' + listeningTopicName.c_str(); // Name of topic this device will publish distance to
-
-int mqttInput[maxDevices];                                    // List of devices used as input
-int numOfInput = 0;                                     // Number of devices used as input
-int mqttOutput[maxDevices];                                   // List of devices using this device as input
-
-char colorMapping[maxDevices];
-int numOfMapping = 0;
-
-
-int convertedDistance;
-boolean publishOutput = false;                 // Toggle if device should publish distance data (to minimize network abuse)
-boolean publishZero = false;                  // Avoid leaving the led with light after distance is 0 after successfull distance publish
-
-int newTime = millis();
-int oldTime = millis();
-const int INTERVAL = 300;         // Distance measuring interval (millisec)
 
 
 void setup() {
   
   Serial.begin(115200);
+  // Set pin modes for ultrasonic sensor and RGB LED
   pinMode(TRIGGER, OUTPUT);
   pinMode(ECHO, INPUT);
-  
   pinMode(RED, OUTPUT);
   pinMode(GREEN, OUTPUT);
   pinMode(BLUE, OUTPUT);
@@ -80,6 +67,7 @@ void setup() {
   client.setServer(mqttServer, 1883);             // Set server with given variable and default MQTT port
   client.setCallback(callback);                   // Callback invoked when message on subscribed topic is received
 
+  // Flash green to indicate system is initializd 
   analogWrite(GREEN, 250);
   delay(1000);
   turnOffLed();
@@ -97,12 +85,14 @@ void loop() {
   // Allow the client to process incoming messages and maintain its connection to the server
   client.loop(); 
 
+  // Return if time interval is not reached
   if (newTime < INTERVAL + oldTime) return;
 
-  if (publishOutput) {
-    distance = sonar.ping_cm();
-    // Distance is in range 0 -> 40 (MAX_DISTANCE). Light intensity is a value from 0 to 255
-    //if (distance < 3) convertedDistance = 0;
+  // Publish distance if node is used as input
+  if (inputCounter > 0) {
+    distance = sonar.ping_cm(); // Distance is in range 0 -> 40 (MAX_DISTANCE)
+    // Output can be written to with 8 bits
+    // Convert distance to a range of 0-255
     convertedDistance = distance * 6.25;
     //Serial.println("cm: " + (String) distance);
     if (distance != 0 ) {
@@ -116,47 +106,6 @@ void loop() {
       publishZero = false;
       oldTime = millis();
     } 
-    // delay(200); TODO: LEGG INN 40TIMER
-  }
-  
-  /*
-  ledStrength = distance * 6.35; // led strength will be in range 0 - 255
-  ledInverse = 255 - ledStrength;
-  Serial.println("+led: " + (String) ledStrength);
-  if (ledInverse > 40) {
-    analogWrite(BLUE, ledInverse);
-  } else {
-    analogWrite(BLUE, 0);
-  }
-  
-  Serial.println("-led: " + (String) ledInverse);
-  analogWrite(GREEN, ledStrength);
-  delay(100);
-
-    // Check if MQTT client is connected, (re)connect if not
-  if (! client.connected()) {
-    reconnect();
-  }
-  // Allow the client to process incoming messages and maintain its connection to the server
-  client.loop(); 
-  
-  //publishMessage(data, "topic");
-  */
-}
-  
-
-
-void testColors() {
-  for (int color = 0; color < 3; color++) {
-    for (int i = 0; i < 255; i += 10) {
-      if (color == 0) {
-        analogWrite(RED, i);
-      } else if (color == 1) {
-        analogWrite(GREEN, i);
-      } else if (color == 2) {
-        analogWrite(BLUE, i);
-      } delay(200);
-    }
   }
 }
 
@@ -167,14 +116,13 @@ void turnOffLed() {
   analogWrite(BLUE, 0);
 }
 
-
+// ESP8266 WiFi setup
 void wifiSetup() {
   delay(10);
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
-  // Start connecting to WiFi
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid, password); // Start connecting to WiFi
   
   // Print loading text while connecting 
   while (WiFi.status() != WL_CONNECTED) {
@@ -188,7 +136,7 @@ void wifiSetup() {
   Serial.println(WiFi.localIP());
 }
 
-
+// MQTT function invoked when message is received
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
@@ -200,35 +148,33 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   Serial.println();
   String splitTopicName = splitString(topic, '-', 1);
-  // TODO: Maybe move remove these variables and just compare inline the if
+  // Check and compare which topic a message is received on
+  // E.g. topic == "1-input"
   int compareInputTopic = strcmp(topic, topicInput.c_str());
+  // E.g. topic == "1-output"
   int compareOutputTopic = strcmp(topic, topicOutput.c_str());
+  // E.g. topic == "1-uninput"
   int compareUnInputTopic = strcmp(topic, topicUnInput.c_str());
+  // E.g. topic == "1-unoutput"
   int compareUnOutputTopic = strcmp(topic, topicUnOutput.c_str());
+  // E.g. topic == "3-distance"
   int compareListeningTopic = strcmp(listeningTopicName.c_str(), splitTopicName.c_str());
   
   
   if (compareListeningTopic == 0) {
-    // If receiving data on a topic subscribed to (from device used as input)
-    // E.g. topic = "3-distance"
-    // Serial.println("outputControl");
+    // Receiving data from input node
     outputControl(topic, message);
   } else if (compareOutputTopic == 0) {
-    // Mapping is made to this device - use this device as output
-    // char[0].isNumeric && char[1] == '-' && char[2].isAlphanumeric && length == 3
-    Serial.println("outputSubscription");
+    // Use this device as output
     outputSubscription(message);
   } else if (compareInputTopic == 0) {
-    // Start publishing distance
-    Serial.println("inputSubscription");
+    // Use this device as input
     inputSubscription(message);
   } else if (compareUnOutputTopic == 0) {
     // Stop this device from being used as output
-    Serial.println("unOutputSubscription");
     unOutputSubscription(message);
   } else if (compareUnInputTopic == 0) {
     // Stop this device from being used as input
-    Serial.println("unInputSubscription");
     unInputSubscription(message);
   }
 }
@@ -246,27 +192,14 @@ void reconnect() {
     Serial.println("Client name: " + clientName);
     if (client.connect(clientName.c_str())) { //clientName.c_str())) {
       Serial.println("Connected to MQTT Broker at " + (String) mqttServer);
-      // One client can subscribe to many topics at the same time
-      // If you wish to subscribe to a topic, use the method below
-      //client.subscribe("distance");
 
-      // Listen to devices assigned as input
-      // Data will be in format "ID-COLOR", i.e. "3-B" (meaning device 3 is input on color blue")
-      
-      Serial.println("topicInput: " + topicInput);
-      Serial.println("topicOutput: " + topicOutput);
-      Serial.println("topicUnInput: " + topicUnInput);
-      Serial.println("topicUnOutput: " + topicUnOutput);
-      
+      // Subscribe to MQTT topics used for coordinating mapping relationships
       client.subscribe(topicInput.c_str());
       client.subscribe(topicOutput.c_str());
       client.subscribe(topicUnInput.c_str());
       client.subscribe(topicUnOutput.c_str());
       
-      // Listen to if this device is used as output
-      //client.subscribe("2-distance");
-      
-      // If we loose connection we will reconnect to topics used as input
+      // If connection is lost, reconnect to topics used as input
       resubscribe();
       
       // If you wish, publish a test announcement when connected
@@ -281,46 +214,36 @@ void reconnect() {
   }
 }
 
+// Handle all data from an input node in a mapped relationship
+// E.g. topic = "3-distance" and message = "142"
 void outputControl(String topic, String message) {
-  // E.g. topic = "3-distance" and input = "142"
-  
-  //int inputDevice = (int) topic[0];
   int inputDevice = charToInt(topic[0]);
   int data = message.toInt();
-  //Serial.println("inputDevice: '" + (String) inputDevice + "'\ndata: " + (String) data);
-  
 
+  // Change multiple colors if input node is used for several outputs
   if (inputDevice == redInput) changeColor('r', data); 
   if (inputDevice == greenInput) changeColor('g', data);
   if (inputDevice == blueInput) changeColor('b', data); 
 }
 
-// Tells the material device when to start publishing distance data
+// Use this device as an input node in a mapped relationship 
+// If inputCounter is > 0, publish input data to listening topic
 void inputSubscription(String message) {
-  String outputDevice = (String) message[0];
-  //char color = message[2]; // doesn't need to know color
-
-  //mqttOutput[numOfOutput] = outputDevice.toInt(); // TODO: Fix lazy solution
-  numOfOutput++;
-  publishOutput = true;
-
-  //String topic = inputDevice + "-" + listeningTopicName;
-  //Serial.println("Subscribing to topic '" + topic + "'");
-  //client.subscribe(topic.c_str());
-  Serial.println("This device (" + (String) deviceId + ") is now an input for device " + outputDevice);
+  inputCounter++;
+  // String outputDevice = (String) message[0];
+  // Serial.println("This device (" + (String) deviceId + ") is now an input for device " + outputDevice);
 }
 
 
-// Map this device as output to an input device
+// Use this device as an output node in a mapped relationship
+// Starts listening to the input node's distance topic and uses this
+// data to alter the output (color and mode) given the behaviour attributes
 void outputSubscription(String message){
-  //int inputDevice = atoi((String) message[0].c_str());
-  //int inputDevice = parseInt(message[0]);
-  int inputDevice = charToInt(message[0]);
-  char color = message[2];
-  char inverse = message[3];
-  Serial.println("inputDevice: '" + (String) inputDevice + "'\ncolor: '" + color + "'\ninverse: '" + inverse + "'");
-  if (inverse == 't') Serial.println("inverse ('" + (String) inverse + "') == 't' -> true");
-  else Serial.println("Not inverse");
+  int inputDevice = charToInt(message[0]); // deviceID of input node
+  char color = message[2]; // I.e. 'r', 'g' or 'b'
+  char inverse = message[3]; // I.e. 't' (inverse mode) or 'f' (normal mode)
+  
+  //Serial.println("inputDevice: '" + (String) inputDevice + "'\ncolor: '" + color + "'\ninverse: '" + inverse + "'");
 
   // No need to set inverse to false, as it's instatiated to false and reset if unsubscribed
   if (color == 'r') {
@@ -339,32 +262,22 @@ void outputSubscription(String message){
     Serial.println("Error in outputSubscription: Color not valid [" + message + "] ");
   }
 
+  // Subscribe to input node's distance topic
   String topic = (String) inputDevice + "-" + listeningTopicName;
   client.subscribe(topic.c_str());
   Serial.println("This device ("+  (String) deviceId + ") is now linked to device " + (String) inputDevice + " with color " + color);
-  printInputState();
-}
-
-// Helper function
-int charToInt(char number) {
-  String temp = (String) number;
-  return temp.toInt();
+  // printInputState();
 }
 
 
 // Remove mapping using this device as input
 void unInputSubscription(String message) {
-  // int inputDevice = (int) message[0];
-  numOfOutput--;
-  if (numOfOutput < 1) publishOutput = false;
+  if (inputCounter > 0) inputCounter--;
 }
 
 
 // Remove mapping using this device as output
 void unOutputSubscription(String message) {
-    //int inputDevice = (int) message[0];
-    // Message is just a char with the color to stop using as output
-    // int inputDevice = charToInt(message[0]);
     char color = message[0];
     Serial.println("Unsubscribing input. Color '" + (String) color + "'. Printing state");
     printInputState();
@@ -389,36 +302,23 @@ void unOutputSubscription(String message) {
       blueInverse = false;
       changeColor('b', 0);
     }
-    
-    /*
-    if (color == 'r' && redInput == inputDevice) {
-      Serial.println("Color is matching color red and input device");
-      redInput = 0;
-      redInverse = false;
-    } else if (color == 'g' && greenInput == inputDevice) {
-      Serial.println("Color is matching color green and input device");
-      greenInput = 0;
-      greenInverse = false;
-    } else if (color == 'b' && blueInput == inputDevice) {
-      Serial.println("Color is matching color blue and input device");
-      blueInput = 0;
-      blueInverse = false;
-    }
-    */
 
-    Serial.println("Set input to 0 (hopefully). Printing new state:");
-    printInputState();
+    // Print state after mapping relationship removal
+    // printInputState();
+    
+    // Stop subscribing to input node's distance topic
     String unsubscribeTopic = (String) inputDevice + "-" + listeningTopicName;
-    Serial.println("Unsubscribing topic: '" + unsubscribeTopic + "'");
     client.unsubscribe(unsubscribeTopic.c_str());
+    //Serial.println("Unsubscribed topic [" + unsubscribeTopic + "]");
+    
     // Tell input device to remove this mapping
     String unInputTopic = (String) inputDevice + "-uninput";
-    Serial.println("Sending unInput signal to topic [" + unInputTopic + "]: '" + (String) deviceId + "'");
     publishMessage(charToInt(deviceId), unInputTopic);
-    //turnOffLed();
+    // Serial.println("Sent unInput signal to topic [" + unInputTopic + "]: '" + (String) deviceId + "'");
+    // turnOffLed();
 }
 
-
+// Helper function for debug
 void printInputState() {
   Serial.println("COLOR \t\t DEVICE \t INVERSE");
   Serial.println("Red \t\t " + (String) redInput + " \t\t " + (String) redInverse);
@@ -426,65 +326,11 @@ void printInputState() {
   Serial.println("Blue \t\t " + (String) blueInput + " \t\t " + (String) blueInverse);
 }
 
-/* OLD METHOD
-void outputSubscription(String input){
-  // E.g. input = "3-b"
-  String inputDevice = (String) input[0];
-  char color = input[2];
-  
 
-  mqttInput[numOfInput] = inputDevice.toInt(); // TODO: Fix lazy solution
-  colorMapping[numOfInput] = color;
-  numOfInput++;
-
-  String topic = inputDevice + "-" + listeningTopicName;
-  //Serial.println("Subscribing to topic '" + topic + "'");
-  client.subscribe(topic.c_str());
-  /*for (int i = 0; i < numOfInput; i++) {
-    if (mqttInput[i] == 0) {
-      mqttInput[i] = inputDevice.toInt(); // TODO: Fix lazy solution
-      colorMapping[i] = color;
-    }
-  }*/  
-  /*
-  Serial.println("This device ("+  (String) deviceId + ") is now linked to device " + inputDevice + " with color " + (String) color);
-  Serial.print("mqttInput: ");
-  for (int i = 0; i < maxDevices; i++) {
-    Serial.print((String) mqttInput[i]);
-  }
-  Serial.println();
-  Serial.print("colorMapping: ");
-  Serial.println(colorMapping);
-  Serial.println("numOfInput: " + (String) numOfInput);
-}
-*/
-
-
-
-/* OLD METHOD
-void outputSubscription(String message) {
-  String outputDevice = (String) message[0];
-  char color = message[2];
-
-  mqttOutput[numOfOutput] = outputDevice.toInt(); // TODO: Fix lazy solution
-  numOfOutput++;
-  publishOutput = true;
-
-  //String topic = inputDevice + "-" + listeningTopicName;
-  //Serial.println("Subscribing to topic '" + topic + "'");
-  //client.subscribe(topic.c_str());
-  Serial.println("This device ("+  (String) deviceId + ") is now an input for device " + outputDevice + " with color " + (String) color);
-  Serial.print("mqttOutput: ");
-  for (int i = 0; i < maxDevices; i++) {
-    Serial.print((String) mqttOutput[i]);
-  }
-}*/
-
-// If mqtt connection breaks, this will make sure your 
+// If MQTT connection breaks, this will make sure your 
 // client resubscribes to all devices used as input
 void resubscribe() {
-  
-  turnOffLed();
+  turnOffLed(); // Make sure a color doesn't get stuck displaying a color
   String topic;
   
   if (redInput != 0) {
@@ -504,35 +350,15 @@ void resubscribe() {
   }
 }
 
-/* OLD METHOD
-void resubscribe() {
-  turnOffLed();
-  for (int i = 0; i < numOfInput; i++){
-    if (mqttInput[i] != 0) {
-      String topic = mqttInput[i] + "-" + listeningTopicName;
-      Serial.println("Resubscribing to topic " + topic);
-      client.subscribe(topic.c_str());
-    }
-  }
-}
-*/
-/*
-int lastRed = 0;
-int lastGreen = 0;
-int lastBlue = 0;
-*/
+
 void changeColor(char color, int ledValue) {
-  //if (ledValue < 0 || ledValue > 255) {
+  // color = 'r' || 'g' || 'b'
+  // 0 <= ledValue <= 255
+  
+  int inverseMinValue = 26; // Have a threshold for low values, as the sensor is bad at reading short distances
+  int ledStrength;
 
-  // 3 cm -> ledValue 18
-  // 4 cm -> ledValue 25
-
-  int inverseMinValue = 26;
-  int ledStrength; //= ledValue;
-  //Serial.println("Reached changeColor(): ledStrength = " + (String) ledStrength);
   if (color  == 'r') {
-    //if (!redInverse && ledValue != 0) ledStrength = 255 - ledValue;
-    //else if (redInverse && ledValue == 0) ledStrength = 255;
     if  (!redInverse && ledValue == 0) ledStrength = 0;
     else if (!redInverse && ledValue != 0) ledStrength = 255 - ledValue;
     else if (redInverse && ledValue == 0) ledStrength = 255;
@@ -548,7 +374,7 @@ void changeColor(char color, int ledValue) {
     else if (greenInverse && ledValue != 0) ledStrength = ledValue;
     Serial.println("Set color green to value " + (String) ledStrength);
     analogWrite(GREEN, ledStrength);
-  } else if (color == 'b') {  //&& ledValue != 0) {
+  } else if (color == 'b') {  
     if  (!blueInverse && ledValue == 0) ledStrength = 0;
     else if (!blueInverse && ledValue != 0) ledStrength = 255 - ledValue;
     else if (blueInverse && ledValue == 0) ledStrength = 255;
@@ -559,86 +385,9 @@ void changeColor(char color, int ledValue) {
   }
 }
 
-/*
 
-  if (color  == 'r') {
-    //if (!redInverse && ledValue != 0) ledStrength = 255 - ledValue;
-    //else if (redInverse && ledValue == 0) ledStrength = 255;
-    if  (!redInverse && ledValue != 0) ledStrength = 255 - ledValue;
-    else if (!redInverse && ledValue == 0) ledStrength = 0;
-    else if (redInverse && ledValue != 0) ledStrength = ledValue;
-    else if (redInverse && ledValue == 0 ) ledStrength = 255;
-    Serial.println("Set color red to value " + (String) ledStrength);
-    analogWrite(RED, ledStrength);
-  } else if (color == 'g') {
-    if (!greenInverse && ledValue != 0) ledStrength = 255 - ledValue;
-    else if (greenInverse && ledValue == 0) ledStrength = 255;
-    Serial.println("Set color green to value " + (String) ledStrength);
-    analogWrite(GREEN, ledStrength);
-  } else if (color == 'b') {  //&& ledValue != 0) {
-    if  (!blueInverse && ledValue == 0) ledStrength = 0;
-    else if (!blueInverse && ledValue != 0) ledStrength = 255 - ledValue;
-    else if (blueInverse && ledValue == 0) ledStrength = 255;
-    else if (blueInverse && ledValue < 26) ledStrength = 0;
-    else if (blueInverse && ledValue != 0) ledStrength = ledValue;
-    Serial.println("Set color blue to value " + (String) ledStrength);
-    analogWrite(BLUE, ledStrength);
-
- */
-
-
-/* OLD METHOD
-void outputControl(String topic, String input) {
-  // E.g. topic = "3-distance" and input = "142"
-  String inputDevice = (String) topic[0];
-  int data = input.toInt();
-  int device = inputDevice.toInt(); // TODO: Fix lazy solution
-
-  // Cheking if input topic is an input on this device
-  for (int i = 0; i < numOfInput; i++) {
-    if (mqttInput[i] == device) {
-      //Serial.println("Input device (" + inputDevice + ") found for color " + (String) colorMapping[i]);
-      changeColor(colorMapping[i], data);
-    }
-  }
-}*/
-
-/*
-boolean isInputDevice(int inputDeviceId) {
-  for (int i = 0; i < numOfInput; i++) {
-    if (mqttInput[i] == inputDeviceId) {
-      return true;
-    }
-  } return false;
-}
-
-// TODO: Refactor
-void unsubscribeTopic(int inputDeviceId) {
-  if (isInputDevice(inputDeviceId)) {
-    Serial.println("Cannot unsubscribe to device " + (String) inputDeviceId + ": Subscription doesn't exist");
-    return;
-  }
-
-  // Remove input device from mqttInput and colorMapping, move all elements to left
-  for (int i = 0; i < maxDevices; i++) {
-    if (mqttInput[i] == inputDeviceId) {
-      for (int elem = i; elem < maxDevices - 1; elem++) {
-        mqttInput[elem] = mqttInput[elem+1];
-        colorMapping[elem] = colorMapping[elem+1];
-      } 
-      mqttInput[maxDevices-1] = 0;
-      colorMapping[maxDevices-1] = '\0';
-      numOfInput--;
-      String topic = (String) inputDeviceId + "-" + listeningTopicName;
-      client.unsubscribe(topic.c_str());
-    }
-  }
-}
-*/
-
-
-String splitString(String data, char separator, int index)
-{
+// Helper function of returning a substring before or after a (char) seperator
+String splitString(String data, char separator, int index) {
     int found = 0;
     int strIndex[] = { 0, -1 };
     int maxIndex = data.length() - 1;
@@ -655,7 +404,7 @@ String splitString(String data, char separator, int index)
 
 void publishMessage(String data, String topic) {
   /* We start by writing our data as formatted output to sized buffer (using snprintf)
-   * In this case we use an integer, and we must format it as such (%d)
+   * In this case we use a String, and we must format it as such (%s)
    * There are different formatting options based on the data type:
    * 
    * %lu unsigned long
