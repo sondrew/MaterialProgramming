@@ -1,6 +1,16 @@
-#include <NewPing.h>        // Library for simplified distance measuring
-#include <ESP8266WiFi.h>    // Handles Wi-Fi connection for ESP8266
-#include <PubSubClient.h>   // MQTT client - uses Wi-Fi library
+/*
+    MATERIAL NODE
+    Part 1 of 2. Code for a master thesis proof of concept:
+    'Prototyping Material Programming Using Internet of Things'
+*/
+
+// LIBRARIES
+// Simplified distance measuring
+#include <NewPing.h>
+// Handle Wi-Fi connection for ESP8266
+#include <ESP8266WiFi.h>
+// MQTT client - utilizes Wi-Fi library
+#include <PubSubClient.h>
 
 // RGB LED pins
 #define RED   D1
@@ -10,22 +20,32 @@
 //  Ultrasonic sensor pins
 #define TRIGGER D6
 #define ECHO    D7
-// Ultrasonic variables
+// Ultrasonic sensor variables
 #define MAX_DISTANCE 40
 NewPing sonar(TRIGGER, ECHO, MAX_DISTANCE);
 
-// Variables for controlling input publishing
-int inputCounter = 0;        // Number of devices using this device as input - publishes data if > 0
-int newTime = millis();     
-int oldTime = millis();     
-const int INTERVAL = 200;    // Distance measuring interval (millisec)
-// Variables for input reading and publishing
-int distance;                // Store distance as centimeters int in range 0-40 (MAX_DISTANCE)
-int convertedDistance;       // Maps distance from 0-40 to 0-255 (8 bits)
-boolean publishZero = false; // Don't publish distance 0 multiple times if not changed
+// VARIABLES FOR CONTROLLING INPUT PUBLISHING
+// Number of devices using this device as input - publishes data if > 0
+int inputCounter = 0;
+int newTime = millis();
+int oldTime = millis();
+// Distance measuring time interval (millisec)
+const int INTERVAL = 200;
 
-const char deviceId = '1';   // ID of this device and the ID on the RFID tag
-// Output color variables, two for each RGB color
+//  VARIABLES FOR INPUT READING AND PUBLISHING
+// Store distance as centimeters int in range 0-40 (MAX_DISTANCE)
+int distance;
+// Maps distance from 0-40 to 0-255 (8 bits)
+int convertedDistance;
+// Don't publish distance 0 multiple times if not changed
+boolean publishZero = false;
+
+// ID of this device and the ID on the RFID tag. Contains an integer
+// but uses char for easy comparison and compatibility with topic names
+// IMPORTANT: Increment this variable for each new material node
+const char deviceId = '1';
+
+// OUTPUT COLOR VARIABLES - TWO FOR EACH RGB COLOR
 // redInput store deviceId of input node and redInverse store output mode
 int redInput = 0;
 boolean redInverse = false;
@@ -34,16 +54,21 @@ boolean greenInverse = false;
 int blueInput = 0;
 boolean blueInverse = false;
 
+// MQTT/WIFI VARIABLES
+const char* ssid = "WiFiName";
+const char* password = "WiFiPassword";
+// IP/host running your MQTT broker
+const char* mqttServer = "127.0.0.1";
+// Create WiFi client instance
+WiFiClient espClient;
+// Create MQTT client instance with WiFi client
+PubSubClient client(espClient);
+// Initialize variable for last received data
+long lastMsg = 0;
+// Initialize variable for publishing data
+char msg[50];
 
-/// MQTT variables
-const char* ssid = "WifiName";          // WiFi name
-const char* password = "WiFiPassword";  // WiFi password
-const char* mqttServer = "127.0.0.1";   // IP/host running your MQTT broker
-WiFiClient espClient;                   // Create WiFi client instance
-PubSubClient client(espClient);         // Create MQTT client instance with WiFi client
-long lastMsg = 0;                       // Initialize variable for last received data
-char msg[50];                           // Initialize variable for publishing data
-// Topics subscribed to
+// SUBSCRIBED TOPIC
 const String topicInput = (String) deviceId + "-input";
 const String topicOutput = (String) deviceId + "-output";
 const String topicUnInput = (String) deviceId + "-uninput";
@@ -63,9 +88,12 @@ void setup() {
   pinMode(GREEN, OUTPUT);
   pinMode(BLUE, OUTPUT);
 
-  wifiSetup();                                    // Run helper function to setup WiFi
-  client.setServer(mqttServer, 1883);             // Set server with given variable and default MQTT port
-  client.setCallback(callback);                   // Callback invoked when message on subscribed topic is received
+  // Run helper function to setup Wi-Fi
+  wifiSetup();
+  // Set server with given variable and default MQTT port
+  client.setServer(mqttServer, 1883);
+  // Callback invoked when message on subscribed topic is received
+  client.setCallback(callback);
 
   // Flash green to indicate system is initializd 
   analogWrite(GREEN, 250);
@@ -122,7 +150,8 @@ void wifiSetup() {
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
-  WiFi.begin(ssid, password); // Start connecting to WiFi
+  // Start connecting to WiFi
+  WiFi.begin(ssid, password);
   
   // Print loading text while connecting 
   while (WiFi.status() != WL_CONNECTED) {
@@ -179,7 +208,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-
+// Reconnect to MQTT broker if connection is lost
 void reconnect() {
   // Loop until reconnected
   Serial.println("Device ID as string: " + (String) deviceId);
@@ -190,7 +219,7 @@ void reconnect() {
     // Attempt to connect
     String clientName = "Material " + (String) deviceId;
     Serial.println("Client name: " + clientName);
-    if (client.connect(clientName.c_str())) { //clientName.c_str())) {
+    if (client.connect(clientName.c_str())) {
       Serial.println("Connected to MQTT Broker at " + (String) mqttServer);
 
       // Subscribe to MQTT topics used for coordinating mapping relationships
@@ -352,10 +381,11 @@ void resubscribe() {
 
 
 void changeColor(char color, int ledValue) {
-  // color = 'r' || 'g' || 'b'
+  // color == 'r' || 'g' || 'b'
   // 0 <= ledValue <= 255
   
-  int inverseMinValue = 26; // Have a threshold for low values, as the sensor is bad at reading short distances
+  // Have a threshold for low values, as the sensor is bad at reading short distances
+  int inverseMinValue = 26;
   int ledStrength;
 
   if (color  == 'r') {

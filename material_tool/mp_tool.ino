@@ -1,3 +1,9 @@
+/*
+    MATERIAL TOOL
+    Part 2 of 2. Code for a master thesis proof of concept:
+    'Prototyping Material Programming Using Internet of Things'
+*/
+
 // LIBRARIES
 // Used for SPI communication for RFID (included in the Arduino IDE)
 #include <SPI.h>
@@ -129,89 +135,93 @@ void loop() {
   // Read analog button value every loop - disregard values under 100
   if (newAnalogValue > 100) readButtons(newAnalogValue);
   
-  //if (newAnalogValue != oldAnalogValue) {
-  //if (newAnalogValue != oldAnalogValue  & newTime > (oldTime + INTERVAL)) {
-  //if (newTime < oldTime + INTERVAL) return;
-
   // Run in every loop to blink LED if inverse mode is active
+  // Use a timed interval flow
   blinkColor();
-
   
-  // Look for new tags
+  // Look for new RFID tags
   if ( ! rfid.PICC_IsNewCardPresent()) {
     delay(50);
     return;
   }
-  // Select one of the tags
+  // Select the RFID tag
   if ( ! rfid.PICC_ReadCardSerial()) {
     delay(50);
     return;
   }
-
-  //oldAnalogValue = newAnalogValue;
-  //oldTime = newTime;
   
   // Initialize RFID reading variables
   MFRC522::StatusCode status;
   byte buffer[18];
   byte size = sizeof(buffer);
 
-  // Reading RFID tags
-  //Serial.println(F("Authenticating using key A..."));
+  // Authenticate RFID tag using known MiFare Classic default keys:
+  // github.com/miguelbalboa/rfid/blob/master/examples/rfid_default_keys/rfid_default_keys.ino
   status = (MFRC522::StatusCode) rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(rfid.uid));
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("PCD_Authenticate() failed: "));
     Serial.println(rfid.GetStatusCodeName(status));
     return;
   }
+
+  // Print the unique id of the RFID tag (not the same as material node ID)
   //Serial.print(F("Card UID:"));
   //dumpByteArray(rfid.uid.uidByte, rfid.uid.size);
 
+  // Print sector 1 of RFID tag
   //Serial.println(F("\nCurrent data in sector:"));
   //rfid.PICC_DumpMifareClassicSectorToSerial(&(rfid.uid), &key, sector);
 
+  // Read first 8 bytes of block 4 on sector 1 containing the material node ID
   status = (MFRC522::StatusCode) rfid.MIFARE_Read(blockAddr, buffer, &size);
     if (status != MFRC522::STATUS_OK) {
       Serial.print(F("MIFARE_Read() failed: "));
       Serial.println(rfid.GetStatusCodeName(status));
     }
 
+  // Print all 16 bytes of block 4 sector 1
   //Serial.print(F("Data in block ")); Serial.print(blockAddr); Serial.println(F(":"));
+
+  // Store RFID data containing material node ID as String
   String identification = returnByteString(buffer, 8);
-  //Serial.println("identification: " + identification);
+  // Cast material node ID to int - removes redundant hex values
   int deviceNumber = identification.toInt();
-  Serial.println("deviceNumber: " + (String) deviceNumber);
+  //Serial.println("deviceNumber: " + (String) deviceNumber);
   
+  // The read material device is an input node
   if (inputPressed && !outputPressed) {
-    
-    if (inputDevice != 0) { // Input device already set - cannot read again
-      Serial.println("Input device has already been set (device " + (String) inputDevice + ")");
+    // Input device already set - cannot read again
+    if (inputDevice != 0) {
+      //Serial.println("Input device has already been set (device " + (String) inputDevice + ")");
       failureRead();
-    } else { // Reading input device
+    } else { // Use ID of read RFID tag as input node
       inputDevice = deviceNumber;
-      Serial.println("Input set to device " + (String) inputDevice);
+      //Serial.println("Input set to device " + (String) inputDevice);
       successfulRead();
     }
   } else if (inputPressed && outputPressed) {
-    // TODO: 
-    // Input and output devices are set - send command
+    // Input node is already set
+    // Use ID of read RFID tag as output node
     if (inputDevice != 0) {
       outputDevice = deviceNumber;
-      // TODO: proceed to send mapping over mqtt
-      printVariables();
+      // Publish mapping relationship over MQTT
+      //printVariables();
+      // Publish MQTT message to input and output node
       publishCommand();
+      // Light feedback to indicate successfull command
       successfulCommand();
-      Serial.println("Resetting all settings");
+      //Serial.println("Resetting all settings");
       resetVariables();
-    } else { // Both input and output pressed without any tags read - unoutput device
+    } else { 
+      // Both input and output pressed without any tags read
+      // This means the read tag is told to remove mapping with chosen color
       outputDevice = deviceNumber;
-      Serial.println("UnOutput device " + (String) outputDevice + " with color " + (String) outputColor);
+      //Serial.println("UnOutput device " + (String) outputDevice + " with color " + (String) outputColor);
       publishUnOutput();
       successfulUnOutput();
-      Serial.println("Resetting all settings");
+      //Serial.println("Resetting all settings");
       resetVariables();
     }
-    
   } else {
     Serial.println("RFID tag was scanned (device: " + (String) deviceNumber + ") but no command was run ");
     failureRead();
@@ -240,7 +250,7 @@ String returnByteString(byte *buffer, byte bufferSize) {
   } return hexString;
 }
 
-// Reset all mapping relationship variables
+// Reset all mapping relationship variables after command
 void resetVariables(){
   outputColor = 'g';
   inputPressed = false;
@@ -250,7 +260,7 @@ void resetVariables(){
   invertedDistance = false;
 }
 
-// Helper function for debug
+// Helper function usde for debug
 void printVariables() {
   Serial.println();
   Serial.println("Input device: " + (String) inputDevice);
@@ -265,10 +275,23 @@ boolean inInterval(int compare, int low, int high) {
   return !(compare < low) && !(high < compare);
 }
 
+// Blink RGB led if inverse mode is active
+void blinkColor() {
+  if (!invertedDistance) return;
+  if (newTime < oldTime + INTERVAL) return;
 
+  if (blinkHigh) changeColor(outputColor, 250);
+  else changeColor(outputColor, 0);
+
+  // Alternate on/off blinking
+  blinkHigh = !blinkHigh;
+  oldTime = millis();
+}
+
+// Read analog button values and direct flow
 void readButtons(int analogValue) {
   if (inInterval(newAnalogValue, 300, 390)) {
-    Serial.println("OUTPUT BUTTON PRESSED");
+    // Output button pressed
     if (inputPressed && inputDevice != 0) { // Ready to read output
       outputPressed = true;
       setColor(0, 0, 0);
@@ -283,11 +306,10 @@ void readButtons(int analogValue) {
     } else { // input button is not pressed or input device is not set
       failureRead();
       resetVariables();
-      setColor(200, 200, 200);
+      setColor(200, 200, 200); // idle light
     }
-    //return 4;
   } else if (inInterval(newAnalogValue, 400, 500)) {
-    Serial.println("INVERT DISTANCE BUTTON PRESSED");
+    // MODE BUTTON PRESSED
     if (inputDevice != 0) {
       invertedDistance = !invertedDistance;
       Serial.println("invertedDistance = " + (String) invertedDistance);
@@ -299,36 +321,34 @@ void readButtons(int analogValue) {
       changeColor(outputColor, 250);
     } else {
       failureRead();
-      setColor(200, 200, 200);
+      setColor(200, 200, 200); // idle light
     }
     
   } else if (inInterval(newAnalogValue, 600, 750)) {
-    Serial.println("COLOR CHANGE BUTTON PRESSED");
+    // COLLOR BUTTON PRESSED
     if (inputDevice != 0 || (inputPressed && outputPressed)) {
       alternateColors();
     } else {
       failureRead();
-      setColor(200, 200, 200);
+      setColor(200, 200, 200); // idle light
     }
     
   } else if (inInterval(newAnalogValue, 900, 1025)) {
-    Serial.println("INPUT BUTTON PRESSED");
-    // Input button is alread pressed
+    // INPUT BUTTON PRESSED
     if (inputPressed) {
-      Serial.println("Input was already set. Reseting Variables");
+      Serial.println("Input node was already set. Reseting variables");
       resetVariables();
     }
     setColor(0, 0, 0);
     delay(tactileFlash);
-    setColor(200, 200, 200);
-    // Change from purple to red
+    setColor(200, 200, 200); // idle light
     inputPressed = true;
-    //return 1;
   }
   delay(400);
 }
 
 
+// Alternates between displaying color red, green and blue
 void alternateColors() {
   if (outputColor == 'r') {
     outputColor = 'g';
@@ -344,28 +364,16 @@ void alternateColors() {
 }
 
 
+// Helper function turning off all light
 void turnOffLed() {
   analogWrite(LED_RED, 0);
   analogWrite(LED_GREEN, 0);
   analogWrite(LED_BLUE, 0);
 }
 
-// Blink RGB led if inverse mode is active
-void blinkColor() {
-  if (!invertedDistance) return;
-  if (newTime < oldTime + INTERVAL) return;
-  
-  if (blinkHigh) changeColor(outputColor, 250);
-  else changeColor(outputColor, 0);
-  
-  // Alternate on/off blinking
-  blinkHigh = !blinkHigh;
-  oldTime = millis();
-}
 
-
+// Fade in and out twice with red
 void failureRead() {
-  // Fade in and out twice with red
   turnOffLed();
   for (int num = 0; num < 3; num++) {
     analogWrite(LED_RED, 250);
@@ -375,8 +383,9 @@ void failureRead() {
   } changeColor(outputColor, 250);
 }
 
+
+// Fade in and out twice with green
 void successfulUnOutput() {
-  // Fade in and out twice with green
   for (int num = 0; num < 2; num++) {
     for (int i = 0; i < 255; i += 2) {
       setColor(0, 0, i);
@@ -388,8 +397,9 @@ void successfulUnOutput() {
   } setColor(200, 0, 200);
 }
 
+
+// Fade in and out twice with green
 void successfulRead() {
-  // Fade in and out twice with green
   for (int num = 0; num < 1; num++) {
     for (int i = 0; i < 255; i += 2) {
       setColor(0, i, 0);
@@ -404,8 +414,9 @@ void successfulRead() {
   }
 }
 
+
+// Fade in and out trice with all colors
 void successfulCommand() {
-  // Fade in and out trice with all colors
   for (int num = 0; num < 3; num++) {
     for (int i = 0; i < 255; i += 2) {
       setColor(i, i, i);
@@ -418,23 +429,27 @@ void successfulCommand() {
 }
 
 
+// Helper function writing all colors simultaneously
 void setColor(int colors[]){
   analogWrite(LED_RED, colors[0]);
   analogWrite(LED_GREEN, colors[1]);
   analogWrite(LED_BLUE, colors[2]);
 }
 
+
+// Helper function writing all colors simultaneously
 void setColor(int red, int green, int blue) {
   analogWrite(LED_RED, red);
   analogWrite(LED_GREEN, green);
   analogWrite(LED_BLUE, blue);
 }
 
+
+// Helper function writing one color with given strength
 void changeColor(char color, int ledValue) {
-  /*if (ledValue < 0 || ledValue > 255) {
-    Serial.println("Cannot change led intensity: Input (" + (String) ledValue + ") is negativ or larger than 255");
-    return;
-  }*/
+  // color == 'r' || 'g' || 'b'
+  // 0 <= ledValue <= 255
+
   if (color  == 'r') {        // RED
     analogWrite(LED_RED, ledValue);
   } else if (color == 'g') {  // GREEN
@@ -445,7 +460,7 @@ void changeColor(char color, int ledValue) {
 }
 
 
-
+// Helper function configuring the Wi-Fi
 void wifiSetup() {
   delay(10);
   Serial.println();
@@ -486,12 +501,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   Serial.println();  
 
-  // Material programming tool should not subscribe to any topics
+  // Material programming tool should not subscribe
+  // to any topics or receive any messages
   
 }
 
-
-
+// Reconnect to MQTT broker if connection is lost
 void reconnect() {
   // Loop until reconnected
   while (! client.connected()) {
@@ -501,21 +516,10 @@ void reconnect() {
     //Serial.println("Client name: " + clientName);
     if (client.connect(clientName.c_str())) { //clientName.c_str())) {
       Serial.println("Connected to MQTT Broker at " + (String) mqttServer);
-      // One client can subscribe to many topics at the same time
-      // If you wish to subscribe to a topic, use the method below
-      //client.subscribe("distance");
 
-      // Listen to devices assigned as input
-      // Data will be in format "ID-COLOR", i.e. "3-B" (meaning device 3 is input on color blue")
+      // Material programming tool should not subscribe 
+      // to any topics or receive any messages
 
-      // Listen to if this device is used as output
-      //client.subscribe("2-distance");
-      
-      // If we loose connection we will reconnect to topics used as input
-      // resubscribe();
-      
-      // If you wish, publish a test announcement when connected
-      // client.publish("test", "hello broker");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -527,6 +531,7 @@ void reconnect() {
 }
 
 
+// Remove mapping relationship for given output node and color
 void publishUnOutput() {
   String unOutputMessage = (String) outputColor;
   String unOutputTopic = (String) outputDevice + "-unoutput";
@@ -534,6 +539,8 @@ void publishUnOutput() {
   publishMessage(unOutputMessage, unOutputTopic);
 }
 
+
+// Publish a mapping relationship command to input and output
 void publishCommand() {
   char invert;
   if (invertedDistance) invert = 't';
@@ -548,6 +555,8 @@ void publishCommand() {
   publishMessage(inputMessage, inputTopic);
 }
 
+
+// Publish MQTT message
 void publishMessage(String message, String topic) {
   /* We start by writing our data as formatted output to sized buffer (using snprintf)
    * In this case we use an integer, and we must format it as such (%d)
